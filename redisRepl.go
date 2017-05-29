@@ -53,7 +53,6 @@ func main() {
 			switch cmd {
 			case "set":
 				key := strings.TrimPrefix(v.Channel, "__keyspace@0__:");
-				fmt.Printf("Local set command: %s\n", key)
 				redis_data := "SET/" + key
 				val, _ := redis.String(c.Do("GET", key))
 				redis_data = redis_data + "/" + val
@@ -61,6 +60,7 @@ func main() {
 				if strings.HasPrefix(key, *locNam) {
 					disable_events = true
 				}
+				fmt.Printf("(local)->(remote) %s %s\n", key, val)
 				https_send(httpsAddr, client, redis_data, disable_events)
 			}
 		case redis.Subscription:
@@ -129,13 +129,13 @@ func https_send(httpsAddr *string, client *http.Client, redis_data string, disab
 }
 
 func https_receive(httpsAddr *string, client *http.Client, c redis.Conn, locNam *string) {
-	fmt.Printf("subscribing for remote changes to the namespace: %s\n", *locNam)	
+	fmt.Printf("Subscribing for remote changes to the namespace: %s\n", *locNam)	
 	resp, err := client.Get(*httpsAddr + "/PSUBSCRIBE/__keyspace@0__:" + *locNam + "*")
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer resp.Body.Close()
-	parseMsg(httpsAddr, client, resp.Body, c)
+	parseMsg(httpsAddr, client, resp.Body, c, locNam)
 }
 
 func parseSingle(dec *json.Decoder) (string, interface{}) {
@@ -151,12 +151,11 @@ func parseSingle(dec *json.Decoder) (string, interface{}) {
 	return "", nil
 }
 
-func parseMsg(httpsAddr *string, client *http.Client, reader io.Reader, c redis.Conn) {
+func parseMsg(httpsAddr *string, client *http.Client, reader io.Reader, c redis.Conn, locNam *string) {
 	dec := json.NewDecoder(reader)
 	for dec.More() {
 		var rawMsg interface{}
 		err := dec.Decode(&rawMsg)
-		fmt.Println(rawMsg)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -164,13 +163,13 @@ func parseMsg(httpsAddr *string, client *http.Client, reader io.Reader, c redis.
 		for k, v := range m {
 			switch k {
 			case "PSUBSCRIBE":
-				sub(httpsAddr, client, v, c)
+				sub(httpsAddr, client, v, c, locNam)
 			}
 		}
 	}
 }
 
-func sub(httpsAddr *string, client *http.Client, v interface{}, c redis.Conn) {
+func sub(httpsAddr *string, client *http.Client, v interface{}, c redis.Conn, locNam *string) {
 	redisPayload := v.([]interface{})
 	msgType := redisPayload[0].(string)
 	if msgType == "pmessage" {
@@ -179,16 +178,24 @@ func sub(httpsAddr *string, client *http.Client, v interface{}, c redis.Conn) {
 		key := strings.TrimPrefix(keySpace, "__keyspace@0__:");
 		switch cmd {
 		case "set":
-			_, v := https_send(httpsAddr, client, "GET/" + key, false)
-			fmt.Printf("GET result: %v\n", v)
-			set(key, v, c)
+			_, val := https_send(httpsAddr, client, "GET/" + key, false)
+			fmt.Printf("(remote)->(local) %s %s\n", key, val)
+			set(key, val, c, locNam)
 		}
 	}
 }
 	
-func set(k string, v interface{}, c redis.Conn) {
+func set(key string, v interface{}, c redis.Conn, locNam *string) {
 	redisPayload := v.(string)
-	c.Do("SET", k, redisPayload)
+	if strings.HasPrefix(key, *locNam) {
+		c.Do("MULTI")
+		c.Do("CONFIG", "set", "notify-keyspace-events", "")
+	}
+	c.Do("SET", key, redisPayload)
+	if strings.HasPrefix(key, *locNam) {
+		c.Do("CONFIG", "set", "notify-keyspace-events", "K$h")
+		c.Do("EXEC")
+	}
 }
 
 
