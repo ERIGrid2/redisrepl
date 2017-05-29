@@ -17,7 +17,7 @@ import (
 func main() {
 	// redis flags
 	var redisAddr = flag.String("raddr", ":6379", "Redis server address")
-	var locNam = flag.String("locNam", "restRI", "Namespace to use for your RI")
+	var locNam = flag.String("locNam", "", "Remote namespace to replicate locally (disabled by default)")
 	// https flags
 	var httpsAddr = flag.String("haddr", "https://localhost/redis", "HTTPS server address")
 	var certFile = flag.String("cert", "someCertFile", "A PEM encoded certificate file.")
@@ -38,12 +38,14 @@ func main() {
 	}
 	defer csub.Close()
 	client := https_client(certFile, keyFile, caFile)
-	go https_receive(httpsAddr, client, c, locNam);
+	if *locNam != "" {
+		go https_receive(httpsAddr, client, c, locNam);
+	}
 	// Enable key-event notifications for strings and hashes
 	c.Do("CONFIG", "set", "notify-keyspace-events", "K$h");
 	https_send(httpsAddr, client, "CONFIG/set/notify-keyspace-events/K$h", false) 
 	// subscribe to events from local Redis instance
-	fmt.Printf("Exposing local Redis instance with namespace: %s\n", *locNam)	
+	fmt.Printf("Replicating local Redis instance to remote address: %s\n", *httpsAddr)	
 	psc := redis.PubSubConn{Conn: csub}
 	psc.PSubscribe("__keyspace@0__:*")
 	for {
@@ -57,7 +59,7 @@ func main() {
 				val, _ := redis.String(c.Do("GET", key))
 				redis_data = redis_data + "/" + val
 				disable_events := false
-				if strings.HasPrefix(key, *locNam) {
+				if *locNam != "" && strings.HasPrefix(key, *locNam) {
 					disable_events = true
 				}
 				fmt.Printf("(local)->(remote) %s %s\n", key, val)
