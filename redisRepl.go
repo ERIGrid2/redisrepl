@@ -13,6 +13,8 @@ import (
 	"strings"
 )
 
+var remKey, remVal string;
+
 // Main function: connect to local Redis and replicate every 'set' command
 // remotely via HHTPS. Optionally, replicate any remote 'set' command
 // whose key begins with 'rnam' into the local Redis.
@@ -27,24 +29,28 @@ func main() {
 	var caFile = flag.String("CA", "someCertCAFile", "A PEM encoded CA's certificate file.")
 	flag.Parse()
 
-	// connect to Redis
-	c, e := redis.Dial("tcp", *redisAddr)
-	if e != nil {
-		log.Fatal(e)
+	// create a Redis connection pool
+	pool := redis.Pool{
+		MaxIdle: 3,
+		Dial: func () (redis.Conn, error) {
+			return redis.Dial("tcp", *redisAddr)
+		},
 	}
-	defer c.Close()
+	// first connection to Redis, for remote receiver
+	crem := pool.Get()
+	defer crem.Close()
+	// second connection to Redis, for local listener
+	cloc := pool.Get()
+	defer cloc.Close()
 	// additional connection to Redis for pubsub
-	csub, e := redis.Dial("tcp", *redisAddr)
-	if e != nil {
-		log.Fatal(e)
-	}
+	csub := pool.Get()
 	defer csub.Close()
 	client := https_client(certFile, keyFile, caFile)
 	if *rnam != "" {
-		go receive(*httpsAddr, *rnam, client, c)
+		go receive(*httpsAddr, *rnam, client, crem)
 	}
 	// Enable key-event notifications for strings and hashes
-	c.Do("CONFIG", "set", "notify-keyspace-events", "K$h")
+	cloc.Do("CONFIG", "set", "notify-keyspace-events", "K$h")
 	send(*httpsAddr, "CONFIG/set/notify-keyspace-events/K$h", client, false)
 	// subscribe to events from local Redis instance
 	fmt.Printf("Replicating local Redis instance to remote address: %s\n", *httpsAddr)
@@ -57,15 +63,17 @@ func main() {
 			switch cmd {
 			case "set":
 				key := strings.TrimPrefix(v.Channel, "__keyspace@0__:")
-				redis_data := "SET/" + key
-				val, _ := redis.String(c.Do("GET", key))
-				redis_data = redis_data + "/" + val
-				disable_events := false
-				if *rnam != "" && strings.HasPrefix(key, *rnam) {
-					disable_events = true
+				val, err := redis.String(cloc.Do("GET", key))
+				if key != remKey || val != remVal {
+					redis_data := "SET/" + key
+					redis_data = redis_data + "/" + val
+					disable_events := false
+					if *rnam != "" && strings.HasPrefix(key, *rnam) {
+						disable_events = true
+					}
+					fmt.Printf("(local)->(remote) %s %s %v\n", key, val, err)
+					send(*httpsAddr, redis_data, client, disable_events)
 				}
-				fmt.Printf("(local)->(remote) %s %s\n", key, val)
-				send(*httpsAddr, redis_data, client, disable_events)
 			}
 		case redis.Subscription:
 		case error:
@@ -202,13 +210,7 @@ func sub(addr, rnam string, client *http.Client, v interface{}, c redis.Conn) {
 
 func set(key, rnam string, v interface{}, c redis.Conn) {
 	redisPayload := v.(string)
-	if strings.HasPrefix(key, rnam) {
-		c.Do("MULTI")
-		c.Do("CONFIG", "set", "notify-keyspace-events", "")
-	}
 	c.Do("SET", key, redisPayload)
-	if strings.HasPrefix(key, rnam) {
-		c.Do("CONFIG", "set", "notify-keyspace-events", "K$h")
-		c.Do("EXEC")
-	}
+	remKey = key
+	remVal = redisPayload
 }
