@@ -11,9 +11,10 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 )
 
-var remKey, remVal string;
+var remKey, remVal string
 
 // Main function: connect to local Redis and replicate every 'set' command
 // remotely via HHTPS. Optionally, replicate any remote 'set' command
@@ -46,12 +47,16 @@ func main() {
 	csub := pool.Get()
 	defer csub.Close()
 	client := https_client(certFile, keyFile, caFile)
+	// start the local->remote replication task
+	ch := make(chan string)
+	go checkTimeout(*httpsAddr, client, ch)
+	// if needed, start listening for remote events
 	if *rnam != "" {
 		go receive(*httpsAddr, *rnam, client, crem)
 	}
 	// Enable key-event notifications for strings and hashes
 	cloc.Do("CONFIG", "set", "notify-keyspace-events", "K$h")
-	send(*httpsAddr, "CONFIG/set/notify-keyspace-events/K$h", client, false)
+	send(*httpsAddr, "CONFIG/set/notify-keyspace-events/K$h", client)
 	// subscribe to events from local Redis instance
 	fmt.Printf("Replicating local Redis instance to remote address: %s\n", *httpsAddr)
 	psc := redis.PubSubConn{Conn: csub}
@@ -63,22 +68,41 @@ func main() {
 			switch cmd {
 			case "set":
 				key := strings.TrimPrefix(v.Channel, "__keyspace@0__:")
-				val, err := redis.String(cloc.Do("GET", key))
+				val, _ := redis.String(cloc.Do("GET", key))
 				if key != remKey || val != remVal {
-					redis_data := "SET/" + key
-					redis_data = redis_data + "/" + val
-					disable_events := false
-					if *rnam != "" && strings.HasPrefix(key, *rnam) {
-						disable_events = true
-					}
-					fmt.Printf("(local)->(remote) %s %s %v\n", key, val, err)
-					send(*httpsAddr, redis_data, client, disable_events)
+					escapedKey := strings.Replace(key, "/", "%2f", -1)
+					escapedKey = strings.Replace(escapedKey, ".", "%2e", -1)
+					escapedVal := strings.Replace(val, "/", "%2f", -1)
+					escapedVal = strings.Replace(escapedVal, ".", "%2e", -1)
+					ch <- "/" + escapedKey + "/" + escapedVal 
 				}
+			default:
+				fmt.Printf("(local) Received notification for command: %s\n", cmd)
 			}
 		case redis.Subscription:
 		case error:
 			fmt.Println("Error in local Redis subscription")
 			return
+		}
+	}
+}
+
+func checkTimeout(addr string, c *http.Client, newCmd chan string) {
+	timer := time.After(100 * time.Millisecond)
+	remRedisCmd := "MSET"
+	for {
+		select {
+		case <-timer:
+			// time out, send cmd remotely
+			if remRedisCmd != "MSET" {
+				numKeys := len(strings.Split(remRedisCmd, "/")) / 2
+				fmt.Printf("(local)->(remote) %d keys\n", numKeys)
+				send(addr, remRedisCmd, c)
+				remRedisCmd = "MSET"
+			}
+			timer = time.After(100 * time.Millisecond)
+		case val := <-newCmd:
+			remRedisCmd = remRedisCmd + val
 		}
 	}
 }
@@ -114,42 +138,17 @@ func https_client(certFile, keyFile, caFile *string) *http.Client {
 // format. If noEvs is true, then a transaction is executed: disable
 // events, execute command and then re-enable events. Otherwise, a simple
 // command is executed.
-func send(addr, cmd string, c *http.Client, noEvs bool) (string, interface{}) {
-	var e error
-	// disable events if needed
-	if noEvs {
-		multi := strings.NewReader("MULTI")
-		_, e = c.Post(addr+"/", "text/plain", multi)
-		if e != nil {
-			log.Fatal(e)
-		}
-		cf := strings.NewReader("CONFIG/set/notify-keyspace-events/")
-		_, e = c.Post(addr+"/", "text/plain", cf)
-		if e != nil {
-			log.Fatal(e)
-		}
-	}
+func send(addr, cmd string, c *http.Client) (string, interface{}) {
 	// send the actual command
 	resp, e := c.Post(addr+"/", "text/plain", strings.NewReader(cmd))
-	defer resp.Body.Close()
 	if e != nil {
 		log.Fatal(e)
 	}
-	// re-enable events if needed
-	if noEvs {
-		cf := strings.NewReader("CONFIG/set/notify-keyspace-events/K$h")
-		_, e = c.Post(addr+"/", "text/plain", cf)
-		if e != nil {
-			log.Fatal(e)
-		}
-		exec := strings.NewReader("EXEC")
-		_, e = c.Post(addr+"/", "text/plain", exec)
-		if e != nil {
-			log.Fatal(e)
-		}
-	}
+	defer resp.Body.Close()
 	// return response parsed from JSON
-	return parseSingle(json.NewDecoder(resp.Body))
+	k, v := parseSingle(json.NewDecoder(resp.Body))
+	ioutil.ReadAll(resp.Body)
+	return k, v;
 }
 
 // Parse a JSON message, assuming it has a single field (like a reply after
@@ -201,16 +200,21 @@ func sub(addr, rnam string, client *http.Client, v interface{}, c redis.Conn) {
 		key := strings.TrimPrefix(keySpace, "__keyspace@0__:")
 		switch cmd {
 		case "set":
-			_, val := send(addr, "GET/"+key, client, false)
-			fmt.Printf("(remote)->(local) %s %s\n", key, val)
-			set(key, rnam, val, c)
+			_, val := send(addr, "GET/" + key, client)
+			actVal, _ := redis.String(c.Do("GET", key))
+			// write the value only if it is different from the one
+			// already stored.
+			if actVal != val {
+				fmt.Printf("(remote)->(local) %s %s\n", key, val)
+				set(key, val, c)
+			}
 		}
 	}
 }
 
-func set(key, rnam string, v interface{}, c redis.Conn) {
+func set(key string, v interface{}, c redis.Conn) {
 	redisPayload := v.(string)
 	c.Do("SET", key, redisPayload)
 	remKey = key
 	remVal = redisPayload
-}
+}	
