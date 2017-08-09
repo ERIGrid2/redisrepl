@@ -1,3 +1,24 @@
+/*
+ Main redisRepl program.
+
+ Copyright 2017 Daniele Pala <daniele.pala@rse-web.it>                                                                                                                                                             
+
+ This file is part of redisRepl. 
+
+ redisRepl is free software: you can redistribute it and/or modify
+ it under the terms of the GNU General Public License as published by
+ the Free Software Foundation, either version 3 of the License, or
+ (at your option) any later version.                                                                                                                                                                               
+
+ redisRepl is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of 
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ GNU General Public License for more details.
+
+ You should have received a copy of the GNU General Public License
+ along with redisRepl. If not, see <http://www.gnu.org/licenses/>.
+*/
+
 package main
 
 import (
@@ -11,11 +32,15 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"os"
 )
 
+const version = "1.0.1"
 var remKey, remVal string
 var remHashKey string
 var remHashVal map[string]interface{}
+// version flag
+var showVersion = flag.Bool("version", false, "Show version and exit")
 // redis flags
 var redisAddr = flag.String("raddr", ":6379", "Redis server address")
 var nam = flag.String("nam", "dummyRI", "RI namespace")
@@ -36,6 +61,10 @@ var caFile = flag.String("CA", "someCertCAFile", "A PEM encoded CA's certificate
 //    begins with <nam> into the local Redis.
 func main() {
 	flag.Parse()
+	if *showVersion {
+		log.Printf("RedisRepl version: %s\n", version)
+		os.Exit(0)
+	}
 	// create a Redis connection pool
 	pool := redis.Pool{
 		MaxIdle: 3,
