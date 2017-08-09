@@ -35,7 +35,7 @@ import (
 	"os"
 )
 
-const version = "1.0.1"
+const version = "master"
 var remKey, remVal string
 var remHashKey string
 var remHashVal map[string]interface{}
