@@ -36,7 +36,7 @@ import (
 	"net/url"
 )
 
-const version = "1.0.2"
+const version = "1.0.3"
 
 // Replicator is a remote Redis replicator. It replicates every 'set' or 'hset'
 // command from a local Redis instance to a remote one, using the Webdis
@@ -74,12 +74,12 @@ func main() {
 	// https flags
 	var httpsAddr = flag.String("haddr", "https://localhost/redis", "HTTPS server address")
 	flag.Parse()
-	// build replicator options
-	client := https_client(*certFile, *keyFile, *caFile)
 	if *showVersion {
 		log.Printf("RedisRepl version: %s\n", version)
 		os.Exit(0)
 	}
+	// build replicator options
+	client := https_client(*certFile, *keyFile, *caFile)
 	opts := ReplOpt{
 		redisAddr: *redisAddr,
 		httpsAddr: *httpsAddr,
