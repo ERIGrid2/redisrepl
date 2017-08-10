@@ -36,7 +36,7 @@ import (
 	"net/url"
 )
 
-const version = "master"
+const version = "1.0.2"
 
 // Replicator is a remote Redis replicator. It replicates every 'set' or 'hset'
 // command from a local Redis instance to a remote one, using the Webdis
