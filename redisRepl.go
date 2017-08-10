@@ -33,6 +33,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"net/url"
 )
 
 const version = "master"
@@ -324,7 +325,8 @@ func (r *Replicator) hset(key string, val map[string]interface{}) {
 }
 
 func escape(msg string) string {
-	escaped := strings.Replace(msg, "/", "%2f", -1)
+	escaped := url.QueryEscape(msg) 
+	// in Webdis we must escape also the point
 	escaped = strings.Replace(escaped, ".", "%2e", -1)
 	return escaped
 }
