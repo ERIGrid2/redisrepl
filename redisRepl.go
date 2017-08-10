@@ -126,15 +126,13 @@ func (r *Replicator) Start(opts ReplOpt) {
 	// subscribe to events from local Redis instance
 	log.Printf("Replicating local Redis instance to remote address: %s\n", r.httpsAddr)
 	psc := redis.PubSubConn{Conn: r.csub}
-	psc.PSubscribe("__keyspace@0__:*")
+	psc.PSubscribe("__keyspace@0__:" + opts.nam + "*")
 	for {
 		switch v := psc.Receive().(type) {
 		case redis.PMessage:
 			cmd := string(v.Data)
 			key := strings.TrimPrefix(v.Channel, "__keyspace@0__:")
-			if strings.HasPrefix(key, opts.nam) {
-				r.handleCmd(cmd, key)
-			}
+			r.handleCmd(cmd, key)
 		case redis.Subscription:
 		case error:
 			log.Println("Error in local Redis subscription")
@@ -299,7 +297,7 @@ func (r *Replicator) sub(v interface{}) {
 			// write the value only if it is different from the one
 			// already stored.
 			if hashCmp(r.crem, key, val) == false {
-				log.Printf("(remote)->(local) %s %v\n", key, val)
+				log.Printf("(remote)->(local) hash %s\n", key)
 				r.hset(key, val)
 			}
 		}
