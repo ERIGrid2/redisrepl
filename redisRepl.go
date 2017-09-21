@@ -30,13 +30,13 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
-	"net/url"
 )
 
-const version = "1.0.3"
+const version = "1.0.4"
 
 // Replicator is a remote Redis replicator. It replicates every 'set' or 'hset'
 // command from a local Redis instance to a remote one, using the Webdis
@@ -292,6 +292,8 @@ func (r *Replicator) sub(v interface{}) {
 				log.Printf("(remote)->(local) %s %s\n", key, val)
 				r.set(key, val)
 			}
+			r.remKey = key
+			r.remVal = val
 		case "hset":
 			_, res := send(r.httpsAddr, "HGETALL/"+escape(key), r.client)
 			val := res.(map[string]interface{})
@@ -301,14 +303,14 @@ func (r *Replicator) sub(v interface{}) {
 				log.Printf("(remote)->(local) hash %s\n", key)
 				r.hset(key, val)
 			}
+			r.remHashKey = key
+			r.remHashVal = val
 		}
 	}
 }
 
 func (r *Replicator) set(key string, val string) {
 	r.crem.Do("SET", key, val)
-	r.remKey = key
-	r.remVal = val
 }
 
 func (r *Replicator) hset(key string, val map[string]interface{}) {
@@ -320,12 +322,10 @@ func (r *Replicator) hset(key string, val map[string]interface{}) {
 	if e != nil {
 		log.Println(e)
 	}
-	r.remHashKey = key
-	r.remHashVal = val
 }
 
 func escape(msg string) string {
-	escaped := url.QueryEscape(msg) 
+	escaped := url.QueryEscape(msg)
 	// in Webdis we must escape also the point
 	escaped = strings.Replace(escaped, ".", "%2e", -1)
 	return escaped
