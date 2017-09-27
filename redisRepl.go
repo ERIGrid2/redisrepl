@@ -34,9 +34,10 @@ import (
 	"os"
 	"strings"
 	"time"
+	"sync"
 )
 
-const version = "1.0.4"
+const version = "master"
 
 // Replicator is a remote Redis replicator. It replicates every 'set' or 'hset'
 // command from a local Redis instance to a remote one, using the Webdis
@@ -45,9 +46,11 @@ type Replicator struct {
 	httpsAddr        string                 // HTTPS server address
 	client           *http.Client           // HTTPS client
 	cloc, csub, crem redis.Conn             // Redis connections
-	remKey, remVal   string                 // last remote key-value
-	remHashKey       string                 // last remote hash key
-	remHashVal       map[string]interface{} // last remote hash value
+	// test: more robust replication
+	locExpectedEvents map[string]int
+	locMutex sync.Mutex
+	remExpectedEvents map[string]int
+	remMutex sync.Mutex
 }
 
 // ReplOpt contains options to be used by a Replicator.
@@ -101,6 +104,8 @@ func main() {
 // 4. optionally, replicate any remote 'set' command whose key
 //    begins with <nam> into the local Redis.
 func (r *Replicator) Start(opts ReplOpt) {
+	r.locExpectedEvents = make(map[string]int)
+	r.remExpectedEvents = make(map[string]int)
 	r.httpsAddr = opts.httpsAddr
 	r.client = opts.client
 	// create a Redis connection pool
@@ -145,29 +150,45 @@ func (r *Replicator) Start(opts ReplOpt) {
 func (r *Replicator) handleCmd(cmd, key string) {
 	switch cmd {
 	case "set":
-		val, e := redis.String(r.cloc.Do("GET", key))
-		if e != nil {
-			log.Printf("Error reading %s from Redis\n", key)
-		}
-		if key != r.remKey || val != r.remVal {
+		// the maps need a mutex
+		r.locMutex.Lock()
+		if r.locExpectedEvents[key] == 0 {
+			val, e := redis.String(r.cloc.Do("GET", key))
+			if e != nil {
+				log.Printf("Error reading %s from Redis\n", key)
+			}
 			redisData := "SET/" + escape(key) + "/" + escape(val)
+			r.remMutex.Lock()
+			r.remExpectedEvents[key] = r.remExpectedEvents[key] + 1
+			r.remMutex.Unlock()
 			log.Printf("(local)->(remote) %s %s\n", key, val)
 			send(r.httpsAddr, redisData, r.client)
+		} else {
+			r.locExpectedEvents[key] = r.locExpectedEvents[key] - 1
 		}
+		r.locMutex.Unlock()
 	case "hset":
-		fields, e := redis.StringMap(r.cloc.Do("HGETALL", key))
-		if e != nil {
-			log.Printf("Error reading %s from Redis\n", key)
-		}
-		if key != r.remHashKey || hashCmp(r.cloc, key, r.remHashVal) == false {
+		// the maps need a mutex
+		r.locMutex.Lock()
+		if r.locExpectedEvents[key] == 0 {
+			fields, e := redis.StringMap(r.cloc.Do("HGETALL", key))
+			if e != nil {
+				log.Printf("Error reading %s from Redis\n", key)
+			}
 			redisData := "HMSET/" + key
 			for k, v := range fields {
 				redisData = redisData + "/" + escape(k)
 				redisData = redisData + "/" + escape(v)
 			}
+			r.remMutex.Lock()
+			r.remExpectedEvents[key] = r.remExpectedEvents[key] + 1
+			r.remMutex.Unlock()
 			log.Printf("(local)->(remote) hash %s\n", key)
 			send(r.httpsAddr, redisData, r.client)
+		} else {
+			r.locExpectedEvents[key] = r.locExpectedEvents[key] - 1
 		}
+		r.locMutex.Unlock()
 	default:
 		log.Printf("(local) Unhandled event: %s\n", cmd)
 	}
@@ -280,31 +301,39 @@ func (r *Replicator) sub(v interface{}) {
 		key := strings.TrimPrefix(keySpace, "__keyspace@0__:")
 		switch cmd {
 		case "set":
-			_, res := send(r.httpsAddr, "GET/"+escape(key), r.client)
-			val := res.(string)
-			actVal, e := redis.String(r.crem.Do("GET", key))
-			if e != nil {
-				log.Printf("Reading %s from Redis: %s\n", key, e)
-			}
 			// write the value only if it is different from the one
 			// already stored.
-			if actVal != val {
+			// the maps need a mutex
+			r.remMutex.Lock()
+			if r.remExpectedEvents[key] == 0  {
+				_, res := send(r.httpsAddr, "GET/"+escape(key), r.client)
+				val := res.(string)
 				log.Printf("(remote)->(local) %s %s\n", key, val)
+				r.locMutex.Lock()
+				r.locExpectedEvents[key] = r.locExpectedEvents[key] + 1
+				r.locMutex.Unlock()
 				r.set(key, val)
+			} else {
+				r.remExpectedEvents[key] = r.remExpectedEvents[key] - 1
 			}
-			r.remKey = key
-			r.remVal = val
+			r.remMutex.Unlock()
 		case "hset":
-			_, res := send(r.httpsAddr, "HGETALL/"+escape(key), r.client)
-			val := res.(map[string]interface{})
 			// write the value only if it is different from the one
 			// already stored.
-			if hashCmp(r.crem, key, val) == false {
+			// the maps need a mutex
+			r.remMutex.Lock()
+			if r.remExpectedEvents[key] == 0  {
+				_, res := send(r.httpsAddr, "HGETALL/"+escape(key), r.client)
+				val := res.(map[string]interface{})
 				log.Printf("(remote)->(local) hash %s\n", key)
+				r.locMutex.Lock()
+				r.locExpectedEvents[key] = r.locExpectedEvents[key] + 1;
+				r.locMutex.Unlock()
 				r.hset(key, val)
+			} else {
+				r.remExpectedEvents[key] = r.remExpectedEvents[key] - 1
 			}
-			r.remHashKey = key
-			r.remHashVal = val
+			r.remMutex.Unlock()
 		}
 	}
 }
@@ -329,27 +358,4 @@ func escape(msg string) string {
 	// in Webdis we must escape also the point
 	escaped = strings.Replace(escaped, ".", "%2e", -1)
 	return escaped
-}
-
-func hashCmp(c redis.Conn, key string, hash map[string]interface{}) bool {
-	if hash == nil {
-		return false
-	}
-	if len(hash) == 0 {
-		return false
-	}
-	loc, e := redis.StringMap(c.Do("HGETALL", key))
-	if e != nil {
-		log.Fatal(e)
-	}
-	if len(loc) != len(hash) {
-		return false
-	}
-	for lk, lv := range loc {
-		hv := hash[lk]
-		if hv != lv {
-			return false
-		}
-	}
-	return true
 }
