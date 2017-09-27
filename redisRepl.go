@@ -33,8 +33,8 @@ import (
 	"net/url"
 	"os"
 	"strings"
-	"time"
 	"sync"
+	"time"
 )
 
 const version = "master"
@@ -43,14 +43,14 @@ const version = "master"
 // command from a local Redis instance to a remote one, using the Webdis
 // protocol. Optionally, it can also work in the reverse direction.
 type Replicator struct {
-	httpsAddr        string                 // HTTPS server address
-	client           *http.Client           // HTTPS client
-	cloc, csub, crem redis.Conn             // Redis connections
+	httpsAddr        string       // HTTPS server address
+	client           *http.Client // HTTPS client
+	cloc, csub, crem redis.Conn   // Redis connections
 	// test: more robust replication
 	locExpectedEvents map[string]int
-	locMutex sync.Mutex
+	locMutex          sync.Mutex
 	remExpectedEvents map[string]int
-	remMutex sync.Mutex
+	remMutex          sync.Mutex
 }
 
 // ReplOpt contains options to be used by a Replicator.
@@ -305,7 +305,7 @@ func (r *Replicator) sub(v interface{}) {
 			// already stored.
 			// the maps need a mutex
 			r.remMutex.Lock()
-			if r.remExpectedEvents[key] == 0  {
+			if r.remExpectedEvents[key] == 0 {
 				_, res := send(r.httpsAddr, "GET/"+escape(key), r.client)
 				val := res.(string)
 				log.Printf("(remote)->(local) %s %s\n", key, val)
@@ -322,12 +322,12 @@ func (r *Replicator) sub(v interface{}) {
 			// already stored.
 			// the maps need a mutex
 			r.remMutex.Lock()
-			if r.remExpectedEvents[key] == 0  {
+			if r.remExpectedEvents[key] == 0 {
 				_, res := send(r.httpsAddr, "HGETALL/"+escape(key), r.client)
 				val := res.(map[string]interface{})
 				log.Printf("(remote)->(local) hash %s\n", key)
 				r.locMutex.Lock()
-				r.locExpectedEvents[key] = r.locExpectedEvents[key] + 1;
+				r.locExpectedEvents[key] = r.locExpectedEvents[key] + 1
 				r.locMutex.Unlock()
 				r.hset(key, val)
 			} else {
