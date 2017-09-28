@@ -158,6 +158,7 @@ func (r *Replicator) handleCmd(cmd, key string) {
 				log.Printf("Error reading %s from Redis\n", key)
 			}
 			redisData := "SET/" + escape(key) + "/" + escape(val)
+			r.locMutex.Unlock()
 			r.remMutex.Lock()
 			r.remExpectedEvents[key] = r.remExpectedEvents[key] + 1
 			r.remMutex.Unlock()
@@ -165,8 +166,8 @@ func (r *Replicator) handleCmd(cmd, key string) {
 			send(r.httpsAddr, redisData, r.client)
 		} else {
 			r.locExpectedEvents[key] = r.locExpectedEvents[key] - 1
+			r.locMutex.Unlock()
 		}
-		r.locMutex.Unlock()
 	case "hset":
 		// the maps need a mutex
 		r.locMutex.Lock()
@@ -180,6 +181,7 @@ func (r *Replicator) handleCmd(cmd, key string) {
 				redisData = redisData + "/" + escape(k)
 				redisData = redisData + "/" + escape(v)
 			}
+			r.locMutex.Unlock()
 			r.remMutex.Lock()
 			r.remExpectedEvents[key] = r.remExpectedEvents[key] + 1
 			r.remMutex.Unlock()
@@ -187,8 +189,8 @@ func (r *Replicator) handleCmd(cmd, key string) {
 			send(r.httpsAddr, redisData, r.client)
 		} else {
 			r.locExpectedEvents[key] = r.locExpectedEvents[key] - 1
+			r.locMutex.Unlock()
 		}
-		r.locMutex.Unlock()
 	default:
 		log.Printf("(local) Unhandled event: %s\n", cmd)
 	}
@@ -309,14 +311,15 @@ func (r *Replicator) sub(v interface{}) {
 				_, res := send(r.httpsAddr, "GET/"+escape(key), r.client)
 				val := res.(string)
 				log.Printf("(remote)->(local) %s %s\n", key, val)
+				r.remMutex.Unlock()
 				r.locMutex.Lock()
 				r.locExpectedEvents[key] = r.locExpectedEvents[key] + 1
 				r.locMutex.Unlock()
 				r.set(key, val)
 			} else {
 				r.remExpectedEvents[key] = r.remExpectedEvents[key] - 1
+				r.remMutex.Unlock()
 			}
-			r.remMutex.Unlock()
 		case "hset":
 			// write the value only if it is different from the one
 			// already stored.
@@ -326,14 +329,15 @@ func (r *Replicator) sub(v interface{}) {
 				_, res := send(r.httpsAddr, "HGETALL/"+escape(key), r.client)
 				val := res.(map[string]interface{})
 				log.Printf("(remote)->(local) hash %s\n", key)
+				r.remMutex.Unlock()
 				r.locMutex.Lock()
 				r.locExpectedEvents[key] = r.locExpectedEvents[key] + 1
 				r.locMutex.Unlock()
 				r.hset(key, val)
 			} else {
 				r.remExpectedEvents[key] = r.remExpectedEvents[key] - 1
+				r.remMutex.Unlock()
 			}
-			r.remMutex.Unlock()
 		}
 	}
 }
