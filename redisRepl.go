@@ -37,20 +37,19 @@ import (
 	"time"
 )
 
-const version = "master"
+const version = "1.1"
 
 // Replicator is a remote Redis replicator. It replicates every 'set' or 'hset'
 // command from a local Redis instance to a remote one, using the Webdis
 // protocol. Optionally, it can also work in the reverse direction.
 type Replicator struct {
-	httpsAddr        string       // HTTPS server address
-	client           *http.Client // HTTPS client
-	cloc, csub, crem redis.Conn   // Redis connections
-	// test: more robust replication
-	locExpectedEvents map[string]int
-	locMutex          sync.Mutex
-	remExpectedEvents map[string]int
-	remMutex          sync.Mutex
+	httpsAddr         string         // HTTPS server address
+	client            *http.Client   // HTTPS client
+	cloc, csub, crem  redis.Conn     // Redis connections
+	locExpectedEvents map[string]int // events expected from local Redis
+	locMutex          sync.Mutex     // protects access to locExpectedEvents
+	remExpectedEvents map[string]int // events expected from remote Redis
+	remMutex          sync.Mutex     // protects access to remExpectedEvents
 }
 
 // ReplOpt contains options to be used by a Replicator.
