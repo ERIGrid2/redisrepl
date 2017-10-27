@@ -100,7 +100,7 @@ func main() {
 //    <nam> remotely via HTTPS
 // 3. replicate everly local 'hset' or 'hmset' command whose key
 //    begins with <nam> remotely via HTTPS
-// 4. optionally, replicate any remote 'set' command whose key
+// 4. optionally, replicate any remote 'set', 'hset' or 'hmset' command whose key
 //    begins with <nam> into the local Redis.
 func (r *Replicator) Start(opts ReplOpt) {
 	r.locExpectedEvents = make(map[string]int)
