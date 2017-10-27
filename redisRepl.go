@@ -37,7 +37,7 @@ import (
 	"time"
 )
 
-const version = "1.1"
+const version = "master"
 
 // Replicator is a remote Redis replicator. It replicates every 'set' or 'hset'
 // command from a local Redis instance to a remote one, using the Webdis
