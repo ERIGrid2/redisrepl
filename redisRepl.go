@@ -26,6 +26,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"flag"
+	"fmt"
 	redis "github.com/garyburd/redigo/redis"
 	"io/ioutil"
 	"log"
@@ -55,6 +56,7 @@ type Replicator struct {
 // ReplOpt contains options to be used by a Replicator.
 type ReplOpt struct {
 	redisAddr string       // Local Redis server address
+	redisPass string       // Local Redis server password
 	httpsAddr string       // HTTPS server address
 	client    *http.Client // HTTPS client
 	remCmds   bool         // enable remote -> local replication?
@@ -73,6 +75,7 @@ func main() {
 	var redisAddr = flag.String("raddr", ":6379", "Redis server address")
 	var remCmds = flag.Bool("rc", false, "Enable remote commands (disabled by default)")
 	var nam = flag.String("nam", "dummyRI", "RI namespace")
+	var redisPwEn = flag.Bool("pass", false, "Use password for Redis (disabled by default)")
 	// https flags
 	var httpsAddr = flag.String("haddr", "https://localhost/redis", "HTTPS server address")
 	flag.Parse()
@@ -80,10 +83,17 @@ func main() {
 		log.Printf("RedisRepl version: %s\n", version)
 		os.Exit(0)
 	}
+	// ask for password if needed
+	var redisPw string
+	if *redisPwEn == true {
+		fmt.Print("Enter Redis password: ")
+		fmt.Scanln(&redisPw)
+	}
 	// build replicator options
 	client := https_client(*certFile, *keyFile, *caFile)
 	opts := ReplOpt{
 		redisAddr: *redisAddr,
+		redisPass: redisPw,
 		httpsAddr: *httpsAddr,
 		client:    client,
 		remCmds:   *remCmds,
@@ -111,7 +121,17 @@ func (r *Replicator) Start(opts ReplOpt) {
 	pool := redis.Pool{
 		MaxIdle: 3,
 		Dial: func() (redis.Conn, error) {
-			return redis.Dial("tcp", opts.redisAddr)
+			c, err := redis.Dial("tcp", opts.redisAddr)
+			if err != nil {
+				return nil, err
+			}
+			if opts.redisPass != "" {
+				if _, err := c.Do("AUTH", opts.redisPass); err != nil {
+					c.Close()
+					return nil, err
+				}
+			}
+			return c, nil
 		},
 	}
 	// connection to Redis, for local listener
