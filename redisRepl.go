@@ -36,9 +36,11 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"syscall"
+	"golang.org/x/crypto/ssh/terminal"
 )
 
-const version = "master"
+const version = "1.2.0"
 // logger for printing messages with microsecond precision
 var logger = log.New(os.Stderr, "", log.Ldate | log.Lmicroseconds | log.LUTC)
 
@@ -89,7 +91,8 @@ func main() {
 	var redisPw string
 	if *redisPwEn == true {
 		fmt.Print("Enter Redis password: ")
-		fmt.Scanln(&redisPw)
+		bytePassword, _ := terminal.ReadPassword(int(syscall.Stdin))
+		redisPw = string(bytePassword)
 	}
 	// build replicator options
 	client := https_client(*certFile, *keyFile, *caFile)
