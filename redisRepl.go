@@ -39,6 +39,8 @@ import (
 )
 
 const version = "master"
+// logger for printing messages with microsecond precision
+var logger = log.New(os.Stderr, "", log.Ldate | log.Lmicroseconds | log.LUTC)
 
 // Replicator is a remote Redis replicator. It replicates every 'set' or 'hset'
 // command from a local Redis instance to a remote one, using the Webdis
@@ -80,7 +82,7 @@ func main() {
 	var httpsAddr = flag.String("haddr", "https://localhost/redis", "HTTPS server address")
 	flag.Parse()
 	if *showVersion {
-		log.Printf("RedisRepl version: %s\n", version)
+		logger.Printf("RedisRepl version: %s\n", version)
 		os.Exit(0)
 	}
 	// ask for password if needed
@@ -149,7 +151,7 @@ func (r *Replicator) Start(opts ReplOpt) {
 		go r.receive(opts.nam)
 	}
 	// subscribe to events from local Redis instance
-	log.Printf("Replicating local Redis instance to remote address: %s\n", r.httpsAddr)
+	logger.Printf("Replicating local Redis instance to remote address: %s\n", r.httpsAddr)
 	psc := redis.PubSubConn{Conn: r.csub}
 	psc.PSubscribe("__keyspace@0__:" + opts.nam + "*")
 	for {
@@ -160,7 +162,7 @@ func (r *Replicator) Start(opts ReplOpt) {
 			r.handleCmd(cmd, key)
 		case redis.Subscription:
 		case error:
-			log.Println("Error in local Redis subscription")
+			logger.Println("Error in local Redis subscription")
 			return
 		}
 	}
@@ -174,14 +176,14 @@ func (r *Replicator) handleCmd(cmd, key string) {
 		if r.locExpectedEvents[key] == 0 {
 			val, e := redis.String(r.cloc.Do("GET", key))
 			if e != nil {
-				log.Printf("Error reading %s from Redis\n", key)
+				logger.Printf("Error reading %s from Redis\n", key)
 			}
 			redisData := "SET/" + escape(key) + "/" + escape(val)
 			r.locMutex.Unlock()
 			r.remMutex.Lock()
 			r.remExpectedEvents[key] = r.remExpectedEvents[key] + 1
 			r.remMutex.Unlock()
-			log.Printf("(local)->(remote) %s %s\n", key, val)
+			logger.Printf("(local)->(remote) %s %s\n", key, val)
 			send(r.httpsAddr, redisData, r.client)
 		} else {
 			r.locExpectedEvents[key] = r.locExpectedEvents[key] - 1
@@ -193,7 +195,7 @@ func (r *Replicator) handleCmd(cmd, key string) {
 		if r.locExpectedEvents[key] == 0 {
 			fields, e := redis.StringMap(r.cloc.Do("HGETALL", key))
 			if e != nil {
-				log.Printf("Error reading %s from Redis\n", key)
+				logger.Printf("Error reading %s from Redis\n", key)
 			}
 			redisData := "HMSET/" + key
 			for k, v := range fields {
@@ -204,14 +206,14 @@ func (r *Replicator) handleCmd(cmd, key string) {
 			r.remMutex.Lock()
 			r.remExpectedEvents[key] = r.remExpectedEvents[key] + 1
 			r.remMutex.Unlock()
-			log.Printf("(local)->(remote) hash %s\n", key)
+			logger.Printf("(local)->(remote) hash %s\n", key)
 			send(r.httpsAddr, redisData, r.client)
 		} else {
 			r.locExpectedEvents[key] = r.locExpectedEvents[key] - 1
 			r.locMutex.Unlock()
 		}
 	default:
-		log.Printf("(local) Unhandled event: %s\n", cmd)
+		logger.Printf("(local) Unhandled event: %s\n", cmd)
 	}
 }
 
@@ -220,13 +222,13 @@ func https_client(certFile, keyFile, caFile string) *http.Client {
 	// Load client cert
 	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
 	if err != nil {
-		log.Fatal(err)
+		logger.Fatal(err)
 	}
 
 	// Load CA cert
 	caCert, err := ioutil.ReadFile(caFile)
 	if err != nil {
-		log.Fatal(err)
+		logger.Fatal(err)
 	}
 	caCertPool := x509.NewCertPool()
 	caCertPool.AppendCertsFromPEM(caCert)
@@ -252,7 +254,7 @@ func send(addr, cmd string, c *http.Client) (string, interface{}) {
 	// send the actual command
 	resp, e := c.Post(addr+"/", "text/plain", strings.NewReader(cmd))
 	if e != nil {
-		log.Println(e)
+		logger.Println(e)
 		return "", e
 	}
 	defer resp.Body.Close()
@@ -269,7 +271,7 @@ func parseSingle(dec *json.Decoder) (string, interface{}) {
 	var rawMsg map[string]interface{}
 	e := dec.Decode(&rawMsg)
 	if e != nil {
-		log.Println(e)
+		logger.Println(e)
 		return "", e
 	}
 	for k, v := range rawMsg {
@@ -280,13 +282,13 @@ func parseSingle(dec *json.Decoder) (string, interface{}) {
 
 // Receive and handle a message from the remote subscription.
 func (r *Replicator) receive(nam string) {
-	log.Printf("Subscribing for remote changes to the namespace: %s\n", nam)
+	logger.Printf("Subscribing for remote changes to the namespace: %s\n", nam)
 	// Enable key-event notifications for strings and hashes
 	send(r.httpsAddr, "CONFIG/set/notify-keyspace-events/K$h", r.client)
 
 	resp, e := r.client.Get(r.httpsAddr + "/PSUBSCRIBE/__keyspace@0__:" + nam + "*")
 	if e != nil {
-		log.Println(e)
+		logger.Println(e)
 		time.Sleep(10 * time.Second)
 		go r.receive(nam)
 		return
@@ -297,7 +299,7 @@ func (r *Replicator) receive(nam string) {
 		var rawMsg interface{}
 		err := dec.Decode(&rawMsg)
 		if err != nil {
-			log.Fatal(err)
+			logger.Fatal(err)
 		}
 		m := rawMsg.(map[string]interface{})
 		for k, v := range m {
@@ -308,7 +310,7 @@ func (r *Replicator) receive(nam string) {
 		}
 	}
 	// TODO: retry connection
-	log.Println("Error: remote HTTPS connection down, retrying in 10 seconds")
+	logger.Println("Error: remote HTTPS connection down, retrying in 10 seconds")
 	time.Sleep(10 * time.Second)
 	go r.receive(nam)
 }
@@ -329,7 +331,7 @@ func (r *Replicator) sub(v interface{}) {
 			if r.remExpectedEvents[key] == 0 {
 				_, res := send(r.httpsAddr, "GET/"+escape(key), r.client)
 				val := res.(string)
-				log.Printf("(remote)->(local) %s %s\n", key, val)
+				logger.Printf("(remote)->(local) %s %s\n", key, val)
 				r.remMutex.Unlock()
 				r.locMutex.Lock()
 				r.locExpectedEvents[key] = r.locExpectedEvents[key] + 1
@@ -347,7 +349,7 @@ func (r *Replicator) sub(v interface{}) {
 			if r.remExpectedEvents[key] == 0 {
 				_, res := send(r.httpsAddr, "HGETALL/"+escape(key), r.client)
 				val := res.(map[string]interface{})
-				log.Printf("(remote)->(local) hash %s\n", key)
+				logger.Printf("(remote)->(local) hash %s\n", key)
 				r.remMutex.Unlock()
 				r.locMutex.Lock()
 				r.locExpectedEvents[key] = r.locExpectedEvents[key] + 1
@@ -372,7 +374,7 @@ func (r *Replicator) hset(key string, val map[string]interface{}) {
 	}
 	_, e := r.crem.Do("HMSET", args...)
 	if e != nil {
-		log.Println(e)
+		logger.Println(e)
 	}
 }
 
