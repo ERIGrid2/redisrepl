@@ -38,9 +38,10 @@ import (
 	"time"
 	"syscall"
 	"golang.org/x/crypto/ssh/terminal"
+	"bytes"
 )
 
-const version = "1.2.0"
+const version = "master"
 // logger for printing messages with microsecond precision
 var logger = log.New(os.Stderr, "", log.Ldate | log.Lmicroseconds | log.LUTC)
 
@@ -181,7 +182,14 @@ func (r *Replicator) handleCmd(cmd, key string) {
 			if e != nil {
 				logger.Printf("Error reading %s from Redis\n", key)
 			}
-			redisData := "SET/" + escape(key) + "/" + escape(val)
+			// Using WriteString is much faster than
+			// concatenation with '+'.
+			var buffer bytes.Buffer
+			buffer.WriteString("SET/")
+			buffer.WriteString(escape(key))
+			buffer.WriteString("/")
+			buffer.WriteString(escape(val))
+			redisData := buffer.String()
 			r.locMutex.Unlock()
 			r.remMutex.Lock()
 			r.remExpectedEvents[key] = r.remExpectedEvents[key] + 1
@@ -200,11 +208,17 @@ func (r *Replicator) handleCmd(cmd, key string) {
 			if e != nil {
 				logger.Printf("Error reading %s from Redis\n", key)
 			}
-			redisData := "HMSET/" + key
+			// Using WriteString is much faster than
+			// concatenation with '+'.
+			var buffer bytes.Buffer
+			buffer.WriteString("HMSET/" + key)
 			for k, v := range fields {
-				redisData = redisData + "/" + escape(k)
-				redisData = redisData + "/" + escape(v)
+				buffer.WriteString("/")
+				buffer.WriteString(escape(k))
+				buffer.WriteString("/")
+				buffer.WriteString(escape(v))
 			}
+			redisData := buffer.String()
 			r.locMutex.Unlock()
 			r.remMutex.Lock()
 			r.remExpectedEvents[key] = r.remExpectedEvents[key] + 1
