@@ -41,7 +41,7 @@ import (
 	"bytes"
 )
 
-const version = "master"
+const version = "1.2.2"
 // logger for printing messages with microsecond precision
 var logger = log.New(os.Stderr, "", log.Ldate | log.Lmicroseconds | log.LUTC)
 
