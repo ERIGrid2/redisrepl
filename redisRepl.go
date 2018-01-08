@@ -223,7 +223,7 @@ func (r *Replicator) handleCmd(cmd, key string) {
 			r.remMutex.Lock()
 			r.remExpectedEvents[key] = r.remExpectedEvents[key] + 1
 			r.remMutex.Unlock()
-			logger.Printf("(local)->(remote) hash %s\n", key)
+			logger.Printf("(local)->(remote) hash %s entries %d\n", key, len(fields))
 			send(r.httpsAddr, redisData, r.client)
 		} else {
 			r.locExpectedEvents[key] = r.locExpectedEvents[key] - 1
@@ -366,7 +366,7 @@ func (r *Replicator) sub(v interface{}) {
 			if r.remExpectedEvents[key] == 0 {
 				_, res := send(r.httpsAddr, "HGETALL/"+escape(key), r.client)
 				val := res.(map[string]interface{})
-				logger.Printf("(remote)->(local) hash %s\n", key)
+				logger.Printf("(remote)->(local) hash %s entries %d\n", key, len(val))
 				r.remMutex.Unlock()
 				r.locMutex.Lock()
 				r.locExpectedEvents[key] = r.locExpectedEvents[key] + 1
